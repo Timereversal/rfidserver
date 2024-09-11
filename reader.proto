@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+option go_package = "github.com/Timereversal/rfidserver/reader";
+
+message ReportRequest {
+  int32 tagId = 1;
+  int32 eventId = 2;
+}
+
+message ReportResponse {
+  bool status = 1;
+}
+
+service Reader {
+  rpc Report(ReportRequest) returns (ReportResponse);
+}
+
