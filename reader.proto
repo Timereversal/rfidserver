@@ -1,10 +1,12 @@
 syntax = "proto3";
 
+import "google/protobuf/timestamp.proto";
 option go_package = "github.com/Timereversal/rfidserver/reader";
 
 message ReportRequest {
   int32 tagId = 1;
   int32 eventId = 2;
+  google.protobuf.Timestamp runnerTime = 3;
 }
 
 message ReportResponse {
