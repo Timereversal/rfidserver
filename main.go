@@ -40,9 +40,12 @@ func (s myReaderServer) Report(ctx context.Context, request *reader.ReportReques
 		fmt.Println(err)
 	}
 	runnerTime := request.RunnerTime.AsTime().In(lima)
-	fmt.Printf("TagId: %d , EventID: %d, time:%s \n", request.TagId, request.EventId, runnerTime.Format("01-02-2006 15:04:05"))
+	fmt.Printf("TagId: %d ,Stage: %d, EventID: %d, time:%s \n", request.TagId, request.Stage, request.EventId, runnerTime.Format("01-02-2006 15:04:05"))
 
-	_, err = s.DbConn.Exec(`INSERT INTO race_1234(tag_id, start_time) VALUES($1,$2);`, request.TagId, runnerTime)
+	stageId := fmt.Sprintf("stage_%d", request.Stage)
+	//columnNameStage := fmt.Sprintf("_%d",request.Stage)
+	query := fmt.Sprintf("INSERT INTO race_2345(tag_id, %s) VALUES($1,$2) ON CONFLICT(tag_id) DO UPDATE SET %s = $2;", stageId, stageId)
+	_, err = s.DbConn.Exec(query, request.TagId, runnerTime.Format("01-02-2006 15:04:05"))
 	if err != nil {
 		log.Println(err)
 	}
