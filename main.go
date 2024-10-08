@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/Timereversal/rfidserver/httpserver"
+	"github.com/Timereversal/rfidserver/pubsub"
 	"github.com/Timereversal/rfidserver/reader"
 	_ "github.com/jackc/pgx/v4/stdlib"
 	"google.golang.org/grpc"
@@ -11,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -31,6 +34,7 @@ type myReaderServer struct {
 	//reader.UnimplementedReaderServer
 	reader.UnimplementedReaderServer
 	DbConn *sql.DB
+	pubsub *pubsub.Server[pubsub.RunnerData]
 }
 
 func (s myReaderServer) Report(ctx context.Context, request *reader.ReportRequest) (*reader.ReportResponse, error) {
@@ -44,36 +48,34 @@ func (s myReaderServer) Report(ctx context.Context, request *reader.ReportReques
 
 	stageId := fmt.Sprintf("stage_%d", request.Stage)
 	//columnNameStage := fmt.Sprintf("_%d",request.Stage)
-	query := fmt.Sprintf("INSERT INTO race_2345(tag_id, %s) VALUES($1,$2) ON CONFLICT(tag_id) DO UPDATE SET %s = $2;", stageId, stageId)
-	_, err = s.DbConn.Exec(query, request.TagId, runnerTime.Format("01-02-2006 15:04:05"))
+	query := fmt.Sprintf("INSERT INTO race_3331(tag_id, %s) VALUES($1,$2)  ON CONFLICT(tag_id)  DO UPDATE SET %s = $2 RETURNING tag_id, time_stage_1 ;", stageId, stageId)
+	row := s.DbConn.QueryRow(query, request.TagId, runnerTime.Format("01-02-2006 15:04:05"))
+	var id int
+	var duration string
+	err = row.Scan(&id, &duration)
+
 	if err != nil {
 		log.Println(err)
 	}
+	fmt.Println("tag_id", id, duration)
+
+	s.pubsub.Publish(pubsub.RunnerData{TagId: id, TimeStage1: duration, StageId: int(request.Stage)})
+
 	return &reader.ReportResponse{
 		Status: true,
 	}, nil
 
 }
 
-func eventsHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Events Handler")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	//w.Header().Set("Access-Control-Expose-Headers", "Content-Type")
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	for i := 0; i < 20; i++ {
-		//fmt.Fprintf(w, "data: %d\n\n", i)
-		newd := fmt.Sprintf(`data: {"runner":{"tagId":%d,"eventId":%d}}`, i, i)
-		fmt.Fprintf(w, "%s\n\n", newd)
-		w.(http.Flusher).Flush()
-		time.Sleep(2 * time.Second)
-	}
+type RFIDServer struct {
+	httpHandler http.Handler
+	grpcServer  myReaderServer
+	eventStream chan pubsub.RunnerData
 }
 
 func main() {
+
+	pubsubserver := pubsub.NewServer[pubsub.RunnerData]()
 
 	postgresCfg := PostgresConfig{
 		Host:     "localhost",
@@ -96,6 +98,25 @@ func main() {
 
 	fmt.Println("Database connection established")
 
+	// http server initialization
+	sseServ := httpserver.SSEserver{Sub: pubsubserver}
+	//http.Handle()
+	mux := http.NewServeMux()
+	mux.Handle("/runners", sseServ)
+	//mux.HandleFunc("/runners", eventsHandler)
+	httpServer := &http.Server{
+		Addr:    net.JoinHostPort("0.0.0.0", "8090"),
+		Handler: mux,
+	}
+
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil {
+			fmt.Fprintf(os.Stderr, "error listening : %s\n", err)
+		}
+	}()
+	//
+
+	// Grpc start service
 	listen, err := net.Listen("tcp", "localhost:8080")
 	if err != nil {
 		log.Fatalf("error during open tcp %s", err)
@@ -103,7 +124,7 @@ func main() {
 
 	defer listen.Close()
 	serverRegistrar := grpc.NewServer()
-	service := &myReaderServer{DbConn: db}
+	service := &myReaderServer{DbConn: db, pubsub: pubsubserver}
 	reader.RegisterReaderServer(serverRegistrar, service)
 	reflection.Register(serverRegistrar)
 	err = serverRegistrar.Serve(listen)
