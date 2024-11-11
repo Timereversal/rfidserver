@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/Timereversal/rfidserver/data"
 	"github.com/Timereversal/rfidserver/httpserver"
 	"github.com/Timereversal/rfidserver/pubsub"
 	"github.com/Timereversal/rfidserver/reader"
@@ -16,6 +17,10 @@ import (
 	"os"
 	"time"
 )
+
+type application struct {
+	models data.Models
+}
 
 type PostgresConfig struct {
 	Host     string
@@ -48,8 +53,10 @@ func (s myReaderServer) Report(ctx context.Context, request *reader.ReportReques
 
 	stageId := fmt.Sprintf("stage_%d", request.Stage)
 	//columnNameStage := fmt.Sprintf("_%d",request.Stage)
-	query := fmt.Sprintf("INSERT INTO race_3331(tag_id, %s) VALUES($1,$2)  ON CONFLICT(tag_id)  DO UPDATE SET %s = $2 RETURNING tag_id, time_stage_1 ;", stageId, stageId)
+	query := fmt.Sprintf("INSERT INTO race_event_%d(tag_id, %s) VALUES($1,$2)  ON CONFLICT(tag_id)  DO UPDATE SET %s = $2 RETURNING tag_id, time_stage_1 ;", request.EventId, stageId, stageId)
+	fmt.Println(query)
 	row := s.DbConn.QueryRow(query, request.TagId, runnerTime.Format("01-02-2006 15:04:05"))
+
 	var id int
 	var duration string
 	err = row.Scan(&id, &duration)
@@ -59,7 +66,7 @@ func (s myReaderServer) Report(ctx context.Context, request *reader.ReportReques
 	}
 	fmt.Println("tag_id", id, duration)
 
-	s.pubsub.Publish(pubsub.RunnerData{TagId: id, TimeStage1: duration, StageId: int(request.Stage)})
+	s.pubsub.Publish(pubsub.RunnerData{TagId: id, TimeStage1: duration, StageId: int(request.Stage), EventId: request.EventId})
 
 	return &reader.ReportResponse{
 		Status: true,
@@ -75,7 +82,7 @@ type RFIDServer struct {
 
 func main() {
 
-	pubsubserver := pubsub.NewServer[pubsub.RunnerData]()
+	pubSubServer := pubsub.NewServer[pubsub.RunnerData]()
 
 	postgresCfg := PostgresConfig{
 		Host:     "localhost",
@@ -98,14 +105,23 @@ func main() {
 
 	fmt.Println("Database connection established")
 
+	//app := &application{
+	//	models: data.NewModels(db),
+	//}
 	// http server initialization
-	sseServ := httpserver.SSEserver{Sub: pubsubserver}
+	sseServ := &httpserver.SSEserver{Sub: pubSubServer, DB: db}
 	//http.Handle()
 	mux := http.NewServeMux()
 	mux.Handle("/runners", sseServ)
+	mux.HandleFunc("/upload", httpserver.UploadFile)
+	mux.HandleFunc("/createEvent", sseServ.CreateEventHandler)
+	mux.HandleFunc("/eventsInfo", sseServ.GetEventsInfo)
+	mux.HandleFunc("/createRunner", sseServ.CreateRunner)
+	mux.HandleFunc("/runnersDataRace", sseServ.RunnersDataRace)
 	//mux.HandleFunc("/runners", eventsHandler)
 	httpServer := &http.Server{
-		Addr:    net.JoinHostPort("0.0.0.0", "8090"),
+		Addr: net.JoinHostPort("0.0.0.0", "8090"),
+		//Handler: app.routes(),
 		Handler: mux,
 	}
 
@@ -124,7 +140,7 @@ func main() {
 
 	defer listen.Close()
 	serverRegistrar := grpc.NewServer()
-	service := &myReaderServer{DbConn: db, pubsub: pubsubserver}
+	service := &myReaderServer{DbConn: db, pubsub: pubSubServer}
 	reader.RegisterReaderServer(serverRegistrar, service)
 	reflection.Register(serverRegistrar)
 	err = serverRegistrar.Serve(listen)
